@@ -1,0 +1,17 @@
+name: harmony_assistant
+description: Musical harmony assistant
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  audioplayers: ^6.0.0
+  path_provider: ^2.1.1
+  cupertino_icons: ^1.0.6
+
+flutter:
+  uses-material-design: true
