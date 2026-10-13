@@ -35,17 +35,32 @@ jobs:
           fi
           cat "$MANIFEST"
 
-      - name: Patch compileSdk to 36
+      - name: Patch project compileSdk to 36
         run: |
           GRADLE_FILE=$(find android/app -maxdepth 1 -name "build.gradle*" | head -n 1)
-          echo "File: $GRADLE_FILE"
-          sed -i 's|compileSdk = flutter.compileSdkVersion|compileSdk = 36|' "$GRADLE_FILE"
-          sed -i 's|compileSdkVersion flutter.compileSdkVersion|compileSdkVersion 36|' "$GRADLE_FILE"
-          sed -i 's|compileSdk flutter.compileSdkVersion|compileSdk 36|' "$GRADLE_FILE"
-          grep -n compileSdk "$GRADLE_FILE"
+          echo "Project gradle: $GRADLE_FILE"
+          sed -i -E 's/compileSdk(Version)?[ =]+flutter\.compileSdkVersion/compileSdk = 36/g' "$GRADLE_FILE"
+          sed -i -E 's/compileSdkVersion[ =]+[0-9]+/compileSdkVersion 36/g' "$GRADLE_FILE"
+          sed -i -E 's/compileSdk[ =]+[0-9]+/compileSdk = 36/g' "$GRADLE_FILE"
+          grep -n compileSdk "$GRADLE_FILE" || true
 
       - name: Get dependencies
         run: flutter pub get
+
+      - name: Patch all plugin compileSdk to 36
+        run: |
+          PUB_CACHE_DIR="${PUB_CACHE:-$HOME/.pub-cache}"
+          echo "PUB_CACHE_DIR=$PUB_CACHE_DIR"
+          find "$PUB_CACHE_DIR" -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) -print0 | while IFS= read -r -d '' f; do
+            if grep -qE "compileSdk" "$f"; then
+              sed -i -E 's/compileSdk(Version)?[ =]+[0-9]+/compileSdk = 36/g' "$f"
+            fi
+          done
+          echo "---- Verify file_picker ----"
+          find "$PUB_CACHE_DIR" -path "*file_picker*" -name "build.gradle*" | while read f; do
+            echo "=== $f ==="
+            grep -n "compileSdk" "$f" || true
+          done
 
       - name: Build APK
         run: flutter build apk --release
