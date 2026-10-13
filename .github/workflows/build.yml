@@ -24,24 +24,25 @@ jobs:
           channel: 'stable'
           cache: true
 
-            - name: Generate platform folders
+      - name: Generate platform folders
         run: flutter create . --platforms=android --project-name=harmony_assistant
 
-      - name: Add microphone permission
-        run: sed -i '/<application/i\    <uses-permission android:name="android.permission.RECORD_AUDIO"/>' android/app/src/main/AndroidManifest.xml
+      - name: Patch AndroidManifest with mic permission
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          if ! grep -q RECORD_AUDIO "$MANIFEST"; then
+            sed -i 's|<application|<uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <application|' "$MANIFEST"
+          fi
+          cat "$MANIFEST"
 
-      - name: Fix compileSdk to 36
+      - name: Patch compileSdk to 36
         run: |
           GRADLE_FILE=$(find android/app -maxdepth 1 -name "build.gradle*" | head -n 1)
-          echo "Target file: $GRADLE_FILE"
-          if [[ "$GRADLE_FILE" == *".kts" ]]; then
-            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' "$GRADLE_FILE"
-          else
-            sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/' "$GRADLE_FILE"
-            sed -i 's/compileSdk flutter.compileSdkVersion/compileSdk 36/' "$GRADLE_FILE"
-          fi
-          echo "----- После правки -----"
-          grep -n "compileSdk" "$GRADLE_FILE"
+          echo "File: $GRADLE_FILE"
+          sed -i 's|compileSdk = flutter.compileSdkVersion|compileSdk = 36|' "$GRADLE_FILE"
+          sed -i 's|compileSdkVersion flutter.compileSdkVersion|compileSdkVersion 36|' "$GRADLE_FILE"
+          sed -i 's|compileSdk flutter.compileSdkVersion|compileSdk 36|' "$GRADLE_FILE"
+          grep -n compileSdk "$GRADLE_FILE"
 
       - name: Get dependencies
         run: flutter pub get
