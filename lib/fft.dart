@@ -2,7 +2,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 // ============================================================
-//  1. ПАРСЕР WAV-ФАЙЛОВ (PCM 16-bit)
+//  1. ПАРСЕР WAV-ФАЙЛОВ (PCM 16/24/32-bit + IEEE float 32-bit)
 // ============================================================
 
 /// Разобранный WAV-файл: моно-сигнал в диапазоне -1..1.
@@ -17,17 +17,17 @@ class WavData {
         );
 }
 
-/// Парсит WAV (только PCM 16-bit). Возвращает null, если формат неподдерживаемый.
-/// Стерео микшируется в моно усреднением каналов.
+/// Парсит WAV. Поддерживает PCM 16, 24, 32 бита и IEEE float 32.
+/// Стерео и многоканал микшируются в моно усреднением.
 WavData? parseWav(Uint8List bytes) {
   if (bytes.length < 44) return null;
 
-  // Заголовок RIFF
+  // RIFF
   if (bytes[0] != 0x52 || bytes[1] != 0x49 ||
       bytes[2] != 0x46 || bytes[3] != 0x46) {
     return null;
   }
-  // Формат WAVE
+  // WAVE
   if (bytes[8] != 0x57 || bytes[9] != 0x41 ||
       bytes[10] != 0x56 || bytes[11] != 0x45) {
     return null;
@@ -39,6 +39,7 @@ WavData? parseWav(Uint8List bytes) {
   int? sampleRate;
   int? numChannels;
   int? bitsPerSample;
+  int? audioFormat;
   int? dataOffset;
   int? dataLength;
 
@@ -47,47 +48,97 @@ WavData? parseWav(Uint8List bytes) {
       bytes.sublist(offset, offset + 4),
     );
     final chunkSize = bd.getUint32(offset + 4, Endian.little);
+    final chunkStart = offset + 8;
 
     if (chunkId == 'fmt ') {
-      final audioFormat = bd.getUint16(offset + 8, Endian.little);
-      // 1 = PCM, 0xFFFE = WAVE_FORMAT_EXTENSIBLE (тоже PCM по сути)
-      if (audioFormat != 1 && audioFormat != 0xFFFE) return null;
-      numChannels = bd.getUint16(offset + 10, Endian.little);
-      sampleRate = bd.getUint32(offset + 12, Endian.little);
-      bitsPerSample = bd.getUint16(offset + 22, Endian.little);
+      final wFormatTag = bd.getUint16(chunkStart, Endian.little);
+      numChannels = bd.getUint16(chunkStart + 2, Endian.little);
+      sampleRate = bd.getUint32(chunkStart + 4, Endian.little);
+      bitsPerSample = bd.getUint16(chunkStart + 14, Endian.little);
+
+      // WAVE_FORMAT_EXTENSIBLE (0xFFFE): читаем SubFormat GUID
+      int realFormat = wFormatTag;
+      if (wFormatTag == 0xFFFE) {
+        final cbSize = bd.getUint16(chunkStart + 16, Endian.little);
+        if (cbSize >= 22) {
+          realFormat = bd.getUint16(chunkStart + 24, Endian.little);
+        }
+      }
+      audioFormat = realFormat;
     } else if (chunkId == 'data') {
-      dataOffset = offset + 8;
+      dataOffset = chunkStart;
       dataLength = chunkSize;
     }
 
-    offset += 8 + chunkSize;
+    offset = chunkStart + chunkSize;
     if (chunkSize % 2 == 1) offset++;
   }
 
   if (sampleRate == null ||
       numChannels == null ||
       bitsPerSample == null ||
+      audioFormat == null ||
       dataOffset == null ||
       dataLength == null) {
     return null;
   }
-  if (bitsPerSample != 16) return null;
+
+  // 1 = PCM (int), 3 = IEEE float
+  final isPcm = audioFormat == 1;
+  final isFloat = audioFormat == 3;
+
+  if (!isPcm && !isFloat) return null;
+  if (isPcm &&
+      bitsPerSample != 16 &&
+      bitsPerSample != 24 &&
+      bitsPerSample != 32) {
+    return null;
+  }
+  if (isFloat && bitsPerSample != 32) return null;
 
   if (dataOffset + dataLength > bytes.length) {
     dataLength = bytes.length - dataOffset;
   }
 
-  final totalSamples = dataLength ~/ 2;
-  if (totalSamples <= 0) return null;
+  final bytesPerSample = bitsPerSample ~/ 8;
+  final frameSize = bytesPerSample * numChannels;
+  if (frameSize <= 0) return null;
 
-  final frames = totalSamples ~/ numChannels;
+  final frames = dataLength ~/ frameSize;
+  if (frames <= 0) return null;
+
   final mono = Float32List(frames);
 
   for (int i = 0; i < frames; i++) {
     double sum = 0;
     for (int c = 0; c < numChannels; c++) {
-      final idx = dataOffset + (i * numChannels + c) * 2;
-      sum += bd.getInt16(idx, Endian.little) / 32768.0;
+      final idx = dataOffset + (i * numChannels + c) * bytesPerSample;
+
+      double sample;
+      if (isFloat) {
+        sample = bd.getFloat32(idx, Endian.little);
+      } else {
+        switch (bitsPerSample) {
+          case 16:
+            sample = bd.getInt16(idx, Endian.little) / 32768.0;
+            break;
+          case 24:
+            int v = bytes[idx] |
+                (bytes[idx + 1] << 8) |
+                (bytes[idx + 2] << 16);
+            if ((v & 0x800000) != 0) v -= 0x1000000;
+            sample = v / 8388608.0;
+            break;
+          case 32:
+            sample = bd.getInt32(idx, Endian.little) / 2147483648.0;
+            break;
+          default:
+            sample = 0;
+        }
+      }
+      // Защита от NaN / inf во float-файлах
+      if (sample.isNaN || sample.isInfinite) sample = 0;
+      sum += sample;
     }
     mono[i] = sum / numChannels;
   }
@@ -99,10 +150,8 @@ WavData? parseWav(Uint8List bytes) {
 //  2. FFT (Cooley-Tukey, radix-2, итеративный)
 // ============================================================
 
-/// Проверяет, что n — степень двойки.
 bool _isPow2(int n) => n > 0 && (n & (n - 1)) == 0;
 
-/// Следующая степень двойки, не меньшая n.
 int nextPow2(int n) {
   if (n <= 1) return 1;
   int p = 1;
@@ -112,9 +161,6 @@ int nextPow2(int n) {
   return p;
 }
 
-/// Быстрое преобразование Фурье на месте.
-/// [real] и [imag] должны иметь одинаковую длину, равную степени двойки.
-/// После вызова содержат комплексный спектр.
 void fft(Float64List real, Float64List imag) {
   final n = real.length;
   if (n <= 1) return;
@@ -125,7 +171,6 @@ void fft(Float64List real, Float64List imag) {
     throw ArgumentError('Длина должна быть степенью двойки, получено $n');
   }
 
-  // 1. Bit-reversal permutation
   int j = 0;
   for (int i = 0; i < n; i++) {
     if (i < j) {
@@ -144,7 +189,6 @@ void fft(Float64List real, Float64List imag) {
     j += m;
   }
 
-  // 2. Butterfly
   for (int len = 2; len <= n; len <<= 1) {
     final ang = -2 * pi / len;
     final wReal = cos(ang);
@@ -177,8 +221,6 @@ void fft(Float64List real, Float64List imag) {
   }
 }
 
-/// Обёртка: считает амплитудный спектр для окна сэмплов.
-/// Возвращает массив длиной n/2 (только положительные частоты).
 Float64List magnitudeSpectrum(Float64List samples) {
   final n = samples.length;
   final real = Float64List(n);
@@ -195,7 +237,6 @@ Float64List magnitudeSpectrum(Float64List samples) {
   return mag;
 }
 
-/// Оконная функция Ханна (применяется до FFT, чтобы уменьшить утечку).
 Float64List hannWindow(int n) {
   final w = Float64List(n);
   for (int i = 0; i < n; i++) {
