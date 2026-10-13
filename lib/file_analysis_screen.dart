@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -18,7 +19,10 @@ import 'music_theory.dart';
 Map<String, dynamic> _analyzeBytes(Uint8List bytes) {
   final wav = parseWav(bytes);
   if (wav == null) {
-    return {'error': 'Не удалось прочитать WAV. Поддерживается только PCM 16-bit.'};
+    return {
+      'error': 'Не удалось прочитать WAV. Поддерживаются PCM 16/24/32-bit '
+          'и IEEE float 32-bit.'
+    };
   }
   final result = analyzeWav(wav);
   return {
@@ -56,9 +60,9 @@ class _FileAnalysisScreenState extends State<FileAnalysisScreen> {
   int? _fileSize;
 
   bool _analyzing = false;
+  bool _dragging = false;
   String? _error;
 
-  // Результаты
   List<double>? _chroma;
   List<KeyCandidate>? _keys;
   Duration? _duration;
@@ -73,10 +77,20 @@ class _FileAnalysisScreenState extends State<FileAnalysisScreen> {
     super.dispose();
   }
 
-  Future<void> _pickAndAnalyze() async {
+  // -------- Запуск анализа --------
+
+  Future<void> _runAnalysis(
+    Uint8List bytes,
+    String name,
+    String? path,
+    int size,
+  ) async {
     setState(() {
       _error = null;
       _analyzing = true;
+      _fileName = name;
+      _filePath = path;
+      _fileSize = size;
       _chroma = null;
       _keys = null;
       _duration = null;
@@ -87,36 +101,7 @@ class _FileAnalysisScreenState extends State<FileAnalysisScreen> {
     });
 
     try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['wav'],
-        withData: true,
-      );
-
-      if (result == null || result.files.isEmpty) {
-        setState(() => _analyzing = false);
-        return;
-      }
-
-      final picked = result.files.single;
-      final bytes = picked.bytes;
-      if (bytes == null) {
-        setState(() {
-          _error = 'Не удалось прочитать файл';
-          _analyzing = false;
-        });
-        return;
-      }
-
-      setState(() {
-        _fileName = picked.name;
-        _filePath = picked.path;
-        _fileSize = picked.size;
-      });
-
-      // Анализ в изоляте
       final res = await compute(_analyzeBytes, bytes);
-
       if (!mounted) return;
 
       if (res['error'] != null) {
@@ -158,6 +143,49 @@ class _FileAnalysisScreenState extends State<FileAnalysisScreen> {
     }
   }
 
+  Future<void> _pickAndAnalyze() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['wav'],
+        withData: true,
+      );
+
+      if (result == null || result.files.isEmpty) return;
+
+      final picked = result.files.single;
+      final bytes = picked.bytes;
+      if (bytes == null) {
+        setState(() => _error = 'Не удалось прочитать файл');
+        return;
+      }
+
+      await _runAnalysis(bytes, picked.name, picked.path, picked.size);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = 'Ошибка: $e');
+    }
+  }
+
+  Future<void> _handleDrop(DropDoneDetails details) async {
+    if (details.files.isEmpty) return;
+    final file = details.files.first;
+    final path = file.path;
+
+    if (!path.toLowerCase().endsWith('.wav')) {
+      setState(() => _error = 'Поддерживаются только WAV-файлы');
+      return;
+    }
+
+    try {
+      final bytes = await File(path).readAsBytes();
+      await _runAnalysis(bytes, file.name, path, bytes.length);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = 'Не удалось прочитать файл: $e');
+    }
+  }
+
   Future<void> _playFile() async {
     if (_filePath == null) return;
     try {
@@ -175,34 +203,86 @@ class _FileAnalysisScreenState extends State<FileAnalysisScreen> {
     await _player.stop();
   }
 
+  // -------- UI --------
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Анализ аудиофайла')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+    return DropTarget(
+      onDragEntered: (_) => setState(() => _dragging = true),
+      onDragExited: (_) => setState(() => _dragging = false),
+      onDragDone: (details) {
+        setState(() => _dragging = false);
+        _handleDrop(details);
+      },
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Анализ аудиофайла')),
+        body: Stack(
           children: [
-            _buildFileCard(),
-            const SizedBox(height: 10),
-            if (_analyzing) _buildProgress(),
-            if (_error != null) _buildError(),
-            if (_chroma != null) ...[
-              _buildChromaCard(),
-              const SizedBox(height: 10),
-              _buildKeysCard(),
-              const SizedBox(height: 10),
-              _buildRangeCard(),
-            ],
-            const SizedBox(height: 20),
+            SingleChildScrollView(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildFileCard(),
+                  const SizedBox(height: 10),
+                  if (_analyzing) _buildProgress(),
+                  if (_error != null) _buildError(),
+                  if (_chroma != null) ...[
+                    _buildChromaCard(),
+                    const SizedBox(height: 10),
+                    _buildKeysCard(),
+                    const SizedBox(height: 10),
+                    _buildRangeCard(),
+                  ],
+                  const SizedBox(height: 20),
+                ],
+              ),
+            ),
+            if (_dragging) _buildDropOverlay(),
           ],
         ),
       ),
     );
   }
 
-  // -------- UI блоки --------
+  Widget _buildDropOverlay() {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: Container(
+          color: Colors.deepOrange.withValues(alpha: 0.15),
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 24, vertical: 16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Colors.deepOrange,
+                  width: 2,
+                ),
+              ),
+              child: const Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.download,
+                      size: 48, color: Colors.deepOrange),
+                  SizedBox(height: 8),
+                  Text(
+                    'Отпустите WAV-файл здесь',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _buildFileCard() {
     return Card(
@@ -215,8 +295,8 @@ class _FileAnalysisScreenState extends State<FileAnalysisScreen> {
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 4),
             Text(
-              'Поддерживается только PCM 16-bit WAV. '
-              'Стерео микшируется в моно автоматически.',
+              'Поддерживаются PCM 16/24/32-bit и IEEE float 32-bit. '
+              'Стерео и многоканал микшируются в моно.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 8),
@@ -267,6 +347,12 @@ class _FileAnalysisScreenState extends State<FileAnalysisScreen> {
                     ? 'Анализ...'
                     : 'Выбрать WAV-файл и анализировать'),
               ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'На Windows можно перетащить WAV-файл прямо в окно.',
+              style: Theme.of(context).textTheme.bodySmall,
+              textAlign: TextAlign.center,
             ),
           ],
         ),
@@ -409,8 +495,7 @@ class _FileAnalysisScreenState extends State<FileAnalysisScreen> {
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             if (_duration != null)
-              _infoRow('Длительность',
-                  _formatDuration(_duration!)),
+              _infoRow('Длительность', _formatDuration(_duration!)),
             if (_frameCount != null)
               _infoRow('Обработано кадров', '$_frameCount'),
             if (_voiceLabel != null)
@@ -475,7 +560,6 @@ class _ChromaChart extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final barWidth = constraints.maxWidth / 12;
         return Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: List.generate(12, (i) {
