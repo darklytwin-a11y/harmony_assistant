@@ -4,6 +4,7 @@ import 'music_theory.dart';
 import 'key_detector.dart';
 import 'audio_service.dart';
 import 'piano_keyboard.dart';
+import 'tuner_screen.dart';
 
 void main() => runApp(const HarmonyApp());
 
@@ -19,18 +20,54 @@ class HarmonyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepOrange),
         useMaterial3: true,
       ),
-      home: const HomeScreen(),
+      home: const RootScreen(),
     );
   }
 }
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+class RootScreen extends StatefulWidget {
+  const RootScreen({super.key});
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<RootScreen> createState() => _RootScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _RootScreenState extends State<RootScreen> {
+  int _index = 0;
+
+  static const _pages = [
+    HarmonyScreen(),
+    TunerScreen(),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: IndexedStack(index: _index, children: _pages),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _index,
+        onDestinationSelected: (i) => setState(() => _index = i),
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.piano),
+            label: 'Гармония',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.mic),
+            label: 'Тюнер',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class HarmonyScreen extends StatefulWidget {
+  const HarmonyScreen({super.key});
+  @override
+  State<HarmonyScreen> createState() => _HarmonyScreenState();
+}
+
+class _HarmonyScreenState extends State<HarmonyScreen> {
   final AudioService _audio = AudioService();
 
   int _tonicPc = 6; // F#
@@ -38,7 +75,7 @@ class _HomeScreenState extends State<HomeScreen> {
   double _a4 = 440.0;
 
   Note _sourceNote = const Note(64); // E4
-  int _direction = 1; // 1 = вверх, -1 = вниз
+  int _direction = 1;
   int _voiceCount = 1;
   final List<int> _intervalSteps = [2, 4, 5, 6];
 
