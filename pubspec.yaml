@@ -1,5 +1,5 @@
 name: harmony_assistant
-description: Musical harmony assistant with tuner
+description: Musical harmony assistant with tuner and file analysis
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -12,6 +12,7 @@ dependencies:
   audioplayers: ^6.0.0
   path_provider: ^2.1.1
   record: ^6.1.1
+  file_picker: ^8.1.0
   cupertino_icons: ^1.0.6
 
 flutter:
