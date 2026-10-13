@@ -41,8 +41,10 @@ jobs:
           print(open(path).read())
           EOF
 
-      - name: Get dependencies
-        run: flutter pub get
+            - name: Get dependencies
+        run: |
+          flutter pub get
+          flutter pub deps
 
       - name: Build APK
         run: flutter build apk --release
