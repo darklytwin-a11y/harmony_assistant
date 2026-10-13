@@ -5,6 +5,7 @@ import 'key_detector.dart';
 import 'audio_service.dart';
 import 'piano_keyboard.dart';
 import 'tuner_screen.dart';
+import 'file_analysis_screen.dart';
 
 void main() => runApp(const HarmonyApp());
 
@@ -37,6 +38,7 @@ class _RootScreenState extends State<RootScreen> {
   static const _pages = [
     HarmonyScreen(),
     TunerScreen(),
+    FileAnalysisScreen(),
   ];
 
   @override
@@ -54,6 +56,10 @@ class _RootScreenState extends State<RootScreen> {
           NavigationDestination(
             icon: Icon(Icons.mic),
             label: 'Тюнер',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.audiotrack),
+            label: 'Файл',
           ),
         ],
       ),
