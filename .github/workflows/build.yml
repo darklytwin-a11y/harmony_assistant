@@ -27,6 +27,20 @@ jobs:
       - name: Generate platform folders
         run: flutter create . --platforms=android --project-name=harmony_assistant
 
+      - name: Add microphone permission
+        run: |
+          python3 - <<'EOF'
+          path = 'android/app/src/main/AndroidManifest.xml'
+          with open(path) as f:
+              content = f.read()
+          perm = '<uses-permission android:name="android.permission.RECORD_AUDIO"/>'
+          if 'RECORD_AUDIO' not in content:
+              content = content.replace('<application', perm + '\n    <application', 1)
+              with open(path, 'w') as f:
+                  f.write(content)
+          print(open(path).read())
+          EOF
+
       - name: Get dependencies
         run: flutter pub get
 
